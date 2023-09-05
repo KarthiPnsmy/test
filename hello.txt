@@ -1,114 +1,270 @@
-    <script src="helpers.js"></script>
+package com.example.tstbdemo;
 
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.Toast;
 
-function handleAuthenticatorError(validRecoveries, callback) {
-    const dialogConfig = { title: "Authentication Error", cancelTitle: "Abort Authentication" }
-    const options = { 0: "Retry Authenticator", 1: "Change Authenticator", 2: "Select Authenticator", 3: "Fail" }
-    const dialogOptions = validRecoveries.map((recovery) => {
-        return { title: options[recovery], value: recovery }
-    });
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
-    showDialog(dialogConfig, dialogOptions, (selectedOption) => {
-        if (selectedOption === null) {
-            callback(com.ts.mobile.sdk.AuthenticationErrorRecovery.Fail);
-        } else {
-            callback(selectedOption);
+import com.example.tstbdemo.mock.ActionListenerCallback;
+import com.example.tstbdemo.mock.Worker;
+import com.tripleblind.securikey.LogLevel;
+import com.tripleblind.securikey.SecuriKey;
+import com.tripleblind.securikey.SecuriKeyConfig;
+import com.ts.common.internal.core.logger.Log;
+import com.ts.mobile.sdk.FormInput;
+import com.ts.mobile.sdk.PolicyAction;
+import com.ts.mobile.sdk.UIFormSession;
+import com.ts.mobile.sdk.util.PromiseFuture;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+
+public class TestingFormSessionTBMock2 implements UIFormSession {
+
+    private static final String TAG = TestingFormSessionTBMock2.class.getCanonicalName();
+
+    private final String formId;
+    private final JSONObject originalPayload;
+    private PromiseFuture<FormInput, Void> promise;
+
+    private ViewGroup activity;
+    private AlertDialog dialog;
+    private EditText dialogEt;
+    private String action;
+    private String jwt;
+    private String challenge;
+
+    private SecuriKey securiKey;
+    private Map<String, String> _metadata = new HashMap<>();
+
+    private String ID;
+
+    public TestingFormSessionTBMock2(String formId, JSONObject originalPayload, ViewGroup viewGroup) {
+        this.formId = formId;
+        this.originalPayload = originalPayload;
+        this.activity = viewGroup;
+        initializeSecuriKey();
+        try {
+            action = originalPayload.getString("action");
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
         }
-    });
-}
+        Log.d("@@##", "TestingFormSessionTB");
+        Log.d("@@##", "formId="+formId);
+        Log.d("@@##", "originalPayload="+originalPayload.toString());
 
-function showDialog(config, options, callback) {
-
-    function onDismiss(value) {
-        $("#transmit-training-options-dialog").remove();
-        callback(value);
+        //demo();
     }
 
-    const optionButtons = options.map((option) => {
-        return $('<button/>', { class: `transmit-dialog-option-button`, text: option.title, click: () => { onDismiss(option.value) }});
-    });
+    @Override
+    public PromiseFuture<FormInput, Void> promiseFormInput() {
+        Log.d("@@##", "promiseFormInput");
+        JSONObject result = new JSONObject();
+        try {
+            CountDownLatch countDownLatch = new CountDownLatch(1);
+            // Worker thread
+            Thread workerThread = new Thread(() -> {
+                System.out.println("Worker thread is doing some work...");
 
-    const cancelButton = $('<button/>', { class: `transmit-dialog-cancel-button`, text: config.cancelTitle, click: () => { onDismiss(null) }});
+                try {
+                    result.put("action", action);
+                    result.put("id", formId);
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                    throw new RuntimeException(e);
+                }
 
-    const dialog = `
-        <html>
-            <head>
-                <style>
-                    #transmit-training-options-dialog {
-                        position: fixed;
-                        left: 0px; top: 0px; width: 100vw; height: 100vh;
-                        background-color: rgba(0,0,0,0.3);
+                if(action.equalsIgnoreCase("tb-enroll")) {
+                    try {
+                        jwt = originalPayload.getString("jwt");
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                        throw new RuntimeException(e);
                     }
-                    #transmit-training-options-dialog-content {
-                        width: 36%;
-                        padding: 12px;
-                        position: absolute;
-                        top: 30%;
-                        left: 50%;
-                        margin-right: -50%;
-                        transform: translate(-50%, -50%);
-                        background-color: #ffffff;
-                        border-radius: 4px;
+                    Log.d(TAG, "jwt="+jwt);
+                    this._metadata.put("TS-JWT", jwt);
+
+                    this.securiKey.generateKey(null, this._metadata, (success, metadata, error) -> {
+                        Log.d(TAG, "SecuriKey generateKey callback");
+                        String errorMessage = null;
+                        if (success) {
+                            Log.d(TAG, "SecuriKey generateKey success"+ success);
+                        } else {
+                            errorMessage = error.getMessage();
+                            Integer errorCode = error.getCode();
+                            String traceId = error.getTraceId();
+                            Log.d(TAG, "errorMessage=" + errorMessage + ", errorCode=" + errorCode + ", traceId=" + traceId);
+                        }
+
+                        try {
+                            result.put("enrollment_status", success);
+                            result.put("error", errorMessage);
+                        } catch (JSONException e) {
+                            e.printStackTrace();
+                            throw new RuntimeException(e);
+                        }
+                        countDownLatch.countDown();
+                    });
+                }
+
+                System.out.println("Worker thread has completed its work.");
+                //countDownLatch.countDown(); // Signal that the work is done
+            });
+
+
+        // Start the worker thread
+        workerThread.start();
+        countDownLatch.await();
+
+        Log.d(TAG, "promise submit");
+        promise = new PromiseFuture<>();
+        promise.complete(FormInput.createFormInputSubmissionRequest(result));
+        return promise;
+
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void demo(){
+            JSONObject result = new JSONObject();
+            try {
+                result.put("action", action);
+                result.put("id", formId);
+            } catch (JSONException e) {
+                e.printStackTrace();
+                throw new RuntimeException(e);
+            }
+
+            if(action.equalsIgnoreCase("tb-enroll")) {
+                try {
+                    jwt = originalPayload.getString("jwt");
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                    throw new RuntimeException(e);
+                }
+                Log.d(TAG, "jwt="+jwt);
+                this._metadata.put("TS-JWT", jwt);
+
+                this.securiKey.generateKey(null, this._metadata, (success, metadata, error) -> {
+                    Log.d(TAG, "SecuriKey generateKey callback");
+                    String errorMessage = null;
+                    if (success) {
+                        Log.d(TAG, "SecuriKey generateKey success"+ success);
+                    } else {
+                        errorMessage = error.getMessage();
+                        Integer errorCode = error.getCode();
+                        String traceId = error.getTraceId();
+                        Log.d(TAG, "errorMessage=" + errorMessage + ", errorCode=" + errorCode + ", traceId=" + traceId);
                     }
-                    #transmit-training-options-dialog-content-title {
-                        border-radius: 2px;
+
+                    try {
+                        result.put("enrollment_status", success);
+                        result.put("error", errorMessage);
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                        throw new RuntimeException(e);
                     }
-                    #transmit-training-options-dialog-content-title-label {
-                        display: block;
-                        color: #1E2743;
-                        font-size: 22px;
-                        padding: 6px;
+                });
+            }
+    }
+
+    @Override
+    public void startSession(@Nullable Map<String, Object> clientContext, @NonNull PolicyAction actionContext) {
+        Log.d("@@##", "startSession");
+        //this.activity = TestingUIHandler.getRootView(clientContext);
+        //manageDialog("Start", originalPayload);
+    }
+
+    @Override
+    public void onContinue(@Nullable JSONObject payload) {
+        manageDialog("Continue", payload);
+    }
+
+    @Override
+    public void onError(@Nullable JSONObject payload) {
+        manageDialog("Error for", payload);
+    }
+
+    @Override
+    public void endSession() {
+        if (dialog != null && dialog.isShowing()) {
+            dialog.dismiss();
+        }
+    }
+
+    private void genkeyCallback(){
+
+    }
+
+    private void initializeSecuriKey(){
+        SecuriKeyConfig config = new SecuriKeyConfig("https://vhsm-testing.tripleblind.app", "tbaws-kp62067");
+        //config.setMpcAlgorithm(MPCAlgorithm.RSA2048);
+        //config.setHeaders(settings.getHeaders());
+
+        //to turn off biometrics:
+        config.setRequiresBiometrics(false);
+
+        //custom logging if desired:
+        config.setLogLevel(LogLevel.DEBUG); //filter on >= value
+        config.setLogging((level, message) -> {
+            android.util.Log.d("Custom log", message);
+            return null;
+        });
+
+        TestingUIHandler uiHandler = TestingUIHandler.getInstance();
+        Log.d(TAG, "uiHandler.getActivity="+uiHandler.getActivity());
+
+        this.securiKey = new SecuriKey(uiHandler.getActivity(), config);
+        Log.d(TAG, "securiKeyVersion="+this.securiKey.getVersionString());
+    }
+    private void manageDialog(@Nullable String title, JSONObject payload) {
+        dialog = startDialog(title, "Payload: " + payload, true)
+                .setPositiveButton("Continue", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        try {
+                            String str = new String(dialogEt.getText().toString().getBytes(), "UTF-8");
+                            JSONObject result = new JSONObject(str);
+                            promise.complete(FormInput.createFormInputSubmissionRequest(result));
+                        } catch (Exception e) {
+                            Log.e(TAG, "Invalid JSON. error: " + e.getMessage());
+                            Toast.makeText(activity.getContext(), String.format("'%s' is not a valid JSON", dialogEt.getText().toString()), Toast.LENGTH_LONG).show();
+                        }
                     }
-                    #transmit-training-options-dialog-content-body {
-                        padding: 6px;
-                        margin-top: 12px;
-                    }
-                    .transmit-dialog-option-button {
-                        width: 100%;
-                        height: 40px;
-                        cursor: pointer;
-                        font-size: 16px;
-                        color: #1E2743;
-                        border: 0.5px solid #1E2743;
-                        border-radius: 4px;
-                        margin-bottom: 16px;
-                    }
-                    .transmit-dialog-cancel-button {
-                        width: 100%;
-                        height: 40px;
-                        background-color: #FF0000;
-                        cursor: pointer;
-                        font-size: 16px;
-                        color: #ffffff;
-                        border: 0.5px solid #ffffff;
-                        border-radius: 4px;
-                        font-weight: bold;
-                    }
-                </style>
-            </head>
-            <body>
-                <div id="transmit-training-options-dialog">
-                    <div id="transmit-training-options-dialog-content">
-                        <div id="transmit-training-options-dialog-content-title">
-                            <label id="transmit-training-options-dialog-content-title-label">${config.title}</label>
-                        </div>
-                        
-                        <div id="transmit-training-options-dialog-content-body">
-                            <div id="transmit-training-options-dialog-content-body-options"></div>
-                            <hr />
-                            <div id="transmit-training-options-dialog-content-body-cancel"></div>
-                        </div>
-                        
-                    </div>
-                </div>
-            </body>
-        <html>
-    `;
-    
-    $("body").append(dialog);
-    
-    optionButtons.forEach((optionButton) => {
-        $("#transmit-training-options-dialog-content-body-options").append(optionButton);
-    });
-    $("#transmit-training-options-dialog-content-body-cancel").append(cancelButton);
+                }).show();
+    }
+
+    private AlertDialog.Builder startDialog(@Nullable String title, @Nullable String msg, boolean showEditText) {
+        final AlertDialog.Builder builder = new AlertDialog.Builder(activity.getContext());
+        String t = "form ID: " + formId;
+        if (title != null) {
+            t = title + " " + t;
+        }
+        builder.setTitle(t);
+        builder.setMessage(msg);
+        builder.setCancelable(false);
+        builder.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                promise.complete(FormInput.createFormCancellationRequest());
+            }
+        });
+        if (showEditText) {
+            dialogEt = new EditText(activity.getContext());
+            //dialogEt.setHint("{}");
+            dialogEt.setText("{'otp':0000}");
+            builder.setView(dialogEt);
+        }
+        return builder;
+    }
+
 }
